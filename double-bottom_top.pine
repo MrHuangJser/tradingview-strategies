@@ -1,0 +1,210 @@
+//@version=5
+strategy("Double Bottom/Top", overlay=true, initial_capital=50000, default_qty_type=strategy.fixed, default_qty_value=5, currency=currency.USD, max_bars_back=1000)
+
+// 参数设置
+length = input.int(10, "转折点检测长度", minval=2, step=1, tooltip="用于检测高点和低点的回溯周期数")
+showPivots = input.bool(true, "显示转折点标记")
+maxRiskPerReward = input.int(30, "最大风险回报比(%)", minval=5, maxval=100, step=5, tooltip="形态有效的最大风险回报比")
+
+// 止盈止损设置
+tpOption = input.session(title="盈亏比", defval="1倍", options=["1倍", "0.5倍"])
+
+// 趋势K线确认
+enableTrendCandle = input.bool(true, "启用趋势K线确认", group="信号确认")
+minBodyPercent = input.float(50, "最小实体比例(%)", minval=30, maxval=90, step=5, group="信号确认", tooltip="K线实体占整体的最小百分比")
+maxConfirmBars = input.int(3, "最大确认K线数", minval=1, maxval=10, group="信号确认", tooltip="形成信号后的最大确认K线数量")
+
+// 颜色设置
+bullishColor = input.color(color.rgb(0, 255, 0), "多头颜色")
+bullTrapColor = input.color(color.rgb(255, 165, 0), "多头陷阱颜色")
+bearishColor = input.color(color.rgb(255, 0, 0), "空头颜色")
+bearTrapColor = input.color(color.rgb(255, 165, 0), "空头陷阱颜色")
+textColor = input.color(color.black, "文字颜色")
+
+// 数组初始化
+var zigzagValues = array.new_float(0)
+var zigzagIndexes = array.new_int(0)
+var zigzagDir = array.new_int(0)
+
+var doubleTopBottomValues = array.new_float(3)
+var doubleTopBottomIndexes = array.new_int(3)
+var doubleTopBottomDir = array.new_int(3)
+
+var lineArray = array.new_line(0)
+var labelArray = array.new_label(0)
+
+// 最大数组大小
+int maxArraySize = 10
+
+// 函数：检测转折点
+pivots(int len) =>
+    float ph = ta.highestbars(high, len) == 0 ? high : na
+    float pl = ta.lowestbars(low, len) == 0 ? low : na
+    int dir = 0
+    dir := nz(ph) and na(pl) ? 1 : nz(pl) and na(ph) ? -1 : dir[1]
+    [dir, ph, pl]
+
+// 函数：添加到ZigZag数组
+addToArray(float value, int index, int dir) =>
+    mult = array.size(zigzagValues) < 2 ? 1 : 
+           (dir * value > dir * array.get(zigzagValues, 1)) ? 2 : 1
+    array.unshift(zigzagIndexes, index)
+    array.unshift(zigzagValues, value)
+    array.unshift(zigzagDir, dir * mult)
+    if array.size(zigzagIndexes) > maxArraySize
+        array.pop(zigzagIndexes)
+        array.pop(zigzagValues)
+        array.pop(zigzagDir)
+
+// 函数：更新ZigZag数据
+addToZigzag(dir, dirchanged, ph, pl, index) =>
+    value = (dir == 1 ? ph : pl)
+    if array.size(zigzagValues) == 0 or dirchanged
+        addToArray(value, index, dir)
+    else if (dir == 1 and value > array.get(zigzagValues, 0)) or (dir == -1 and value < array.get(zigzagValues, 0))
+        array.shift(zigzagValues)
+        array.shift(zigzagIndexes)
+        array.shift(zigzagDir)
+        addToArray(value, index, dir)
+
+// 函数：ZigZag计算
+zigzag(len) =>
+    [dir, ph, pl] = pivots(len)
+    dirchanged = ta.change(dir)
+    if nz(ph) or nz(pl)
+        addToZigzag(dir, dirchanged, ph, pl, bar_index)
+
+// 函数：计算双重顶底形态
+calculateDoublePattern() =>
+    doubleTop = false
+    doubleBottom = false
+    
+    if array.size(zigzagValues) >= 4
+        index = array.get(zigzagIndexes, 1)
+        value = array.get(zigzagValues, 1)
+        highLow = array.get(zigzagDir, 1)
+        
+        lindex = array.get(zigzagIndexes, 2)
+        lvalue = array.get(zigzagValues, 2)
+        lhighLow = array.get(zigzagDir, 2)
+        
+        llindex = array.get(zigzagIndexes, 3)
+        llvalue = array.get(zigzagValues, 3)
+        llhighLow = array.get(zigzagDir, 3)
+        
+        risk = math.abs(value - llvalue)
+        reward = math.abs(value - lvalue)
+        riskPerReward = risk * 100 / (risk + reward)
+        
+        if highLow == 1 and llhighLow == 2 and lhighLow < 0 and riskPerReward < maxRiskPerReward
+            doubleTop := true
+        if highLow == -1 and llhighLow == -2 and lhighLow > 0 and riskPerReward < maxRiskPerReward
+            doubleBottom := true
+
+        if doubleTop or doubleBottom
+            array.set(doubleTopBottomValues, 0, value)
+            array.set(doubleTopBottomValues, 1, lvalue)
+            array.set(doubleTopBottomValues, 2, llvalue)
+            
+            array.set(doubleTopBottomIndexes, 0, index)
+            array.set(doubleTopBottomIndexes, 1, lindex)
+            array.set(doubleTopBottomIndexes, 2, llindex)
+            
+            array.set(doubleTopBottomDir, 0, highLow)
+            array.set(doubleTopBottomDir, 1, lhighLow)
+            array.set(doubleTopBottomDir, 2, llhighLow)
+    
+    [doubleTop, doubleBottom]
+
+// 函数：获取突破信息
+getCrossoverInfo(doubleTop, doubleBottom) =>
+    index = array.get(doubleTopBottomIndexes, 0)
+    value = array.get(doubleTopBottomValues, 0)
+    highLow = array.get(doubleTopBottomDir, 0)
+    
+    lindex = array.get(doubleTopBottomIndexes, 1)
+    lvalue = array.get(doubleTopBottomValues, 1)
+    lhighLow = array.get(doubleTopBottomDir, 1)
+    
+    llindex = array.get(doubleTopBottomIndexes, 2)
+    llvalue = array.get(doubleTopBottomValues, 2)
+    llhighLow = array.get(doubleTopBottomDir, 2)
+    
+    var latestDoubleTop = false
+    var latestDoubleBottom = false
+    latestDoubleTop := doubleTop ? true : doubleBottom ? false : latestDoubleTop[1]
+    latestDoubleBottom := doubleBottom ? true : doubleTop ? false : latestDoubleBottom[1]
+    
+    doubleTopConfirmation = 0
+    doubleBottomConfirmation = 0
+    doubleTopConfirmation := latestDoubleTop ? (ta.crossunder(low, lvalue) ? 1 : ta.crossover(high, llvalue) ? -1 : 0) : 0
+    doubleBottomConfirmation := latestDoubleBottom ? (ta.crossover(high, lvalue) ? 1 : ta.crossunder(low, llvalue) ? -1 : 0) : 0
+    
+    [doubleTopConfirmation, doubleBottomConfirmation, latestDoubleTop, latestDoubleBottom]
+
+// 函数：检查趋势K线
+checkTrendCandle(isLong) =>
+    bodyPercent = 100 * math.abs(close - open) / math.abs(high - low)
+    
+    isValid = false
+    if isLong
+        isValid := close > open  and bodyPercent >= minBodyPercent and close > (high - low) / 2 + low
+    else
+        isValid := close < open and bodyPercent >= minBodyPercent and close <  (high - low) / 2 + low
+    
+    isValid
+
+// 主计算逻辑
+zigzag(length)
+[doubleTop, doubleBottom] = calculateDoublePattern()
+[doubleTopConfirmation, doubleBottomConfirmation, latestDoubleTop, latestDoubleBottom] = getCrossoverInfo(doubleTop, doubleBottom)
+
+// 显示ZigZag和转折点
+if barstate.islast and array.size(zigzagIndexes) > 1
+    for x = 0 to array.size(zigzagIndexes) - 1
+        i = array.size(zigzagIndexes) - 1 - x
+        index = array.get(zigzagIndexes, i)
+        value = array.get(zigzagValues, i)
+        highLow = array.get(zigzagDir, i)
+        
+        labelText = highLow == 2 ? "HH" : highLow == 1 ? "LH" : highLow == -1 ? "HL" : "LL"
+        labelColor = highLow == 2 ? bullishColor : highLow == 1 ? bullTrapColor : highLow == -1 ? bearTrapColor : bearishColor
+        labelStyle = highLow > 0 ? label.style_label_down : label.style_label_up
+        labelLocation = yloc.price
+        
+        if showPivots
+            l = label.new(x=index, y=value, text=labelText, xloc=xloc.bar_index, yloc=labelLocation, style=labelStyle, size=size.tiny, 
+                         color=labelColor, textcolor=textColor)
+            array.unshift(labelArray, l)
+            if array.size(labelArray) > 100
+                label.delete(array.pop(labelArray))
+
+// 趋势K线确认信号
+trendCandleShort = checkTrendCandle(false)
+trendCandleLong =  checkTrendCandle(true) 
+    
+
+
+if array.size(zigzagIndexes) > 1
+    latestIndex = array.get(zigzagIndexes, 0)
+    highLow = array.get(zigzagDir, 0)
+    value = array.get(zigzagValues, 0)
+    if bar_index  - latestIndex < maxConfirmBars and strategy.position_size == 0
+        if (highLow == -1 or highLow == -2) and trendCandleLong and close > high[bar_index - latestIndex]
+            loss_points = high + syminfo.mintick - value
+            qty = math.ceil(500 / loss_points / 5)
+            strategy.cancel_all()
+            strategy.entry("Long", strategy.long, stop=high + syminfo.mintick, qty=qty)
+            if tpOption == "1倍"
+                strategy.exit("Long", stop= value, limit= (high - value) + high)
+            else
+                strategy.exit("Long", stop= value, limit= (high - value) /2 + high)
+        if (highLow == 1 or highLow == 2) and trendCandleShort and close < low[bar_index - latestIndex]
+            loss_points = value - (low - syminfo.mintick)
+            qty = math.ceil(500 / loss_points / 5)
+            strategy.cancel_all()
+            strategy.entry("Short", strategy.short, stop=low - syminfo.mintick, qty=qty)
+            if tpOption == "1倍"
+                strategy.exit("Short", stop= value, limit=low - (value - low))
+            else
+                strategy.exit("Short", stop= value, limit=low - (value - low) /2)
