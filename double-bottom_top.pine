@@ -5,12 +5,17 @@ strategy("Double Bottom/Top", overlay=true, initial_capital=50000, default_qty_t
 length = input.int(10, "转折点检测长度", minval=2, step=1, tooltip="用于检测高点和低点的回溯周期数")
 showPivots = input.bool(true, "显示转折点标记")
 maxRiskPerReward = input.int(30, "最大风险回报比(%)", minval=5, maxval=100, step=5, tooltip="形态有效的最大风险回报比")
+// 入场设置
+longSignal = input.string(title="多头入场信号", defval="LL", options=["LL", "HL", "BOTH"])
+shortSignal = input.string(title="空头入场信号", defval="HH", options=["HH", "LH", "BOTH"])
 
 // 止盈止损设置
 tpOption = input.session(title="盈亏比", defval="1倍", options=["1倍", "0.5倍"])
 
 // 趋势K线确认
 enableTrendCandle = input.bool(true, "启用趋势K线确认", group="信号确认")
+// 是否要求趋势K低于信号K线
+trendCandleBelowSignal = input.bool(true, "趋势K线低于信号K线", group="信号确认")
 minBodyPercent = input.float(50, "最小实体比例(%)", minval=30, maxval=90, step=5, group="信号确认", tooltip="K线实体占整体的最小百分比")
 maxConfirmBars = input.int(3, "最大确认K线数", minval=1, maxval=10, group="信号确认", tooltip="形成信号后的最大确认K线数量")
 
@@ -180,17 +185,46 @@ if barstate.islast and array.size(zigzagIndexes) > 1
                 label.delete(array.pop(labelArray))
 
 // 趋势K线确认信号
-trendCandleShort = checkTrendCandle(false)
-trendCandleLong =  checkTrendCandle(true) 
-    
+trendCandleShort = enableTrendCandle ? checkTrendCandle(false) : true
+trendCandleLong =  enableTrendCandle ? checkTrendCandle(true) : true
+
+// 判断是否距离日内RTH结束小于等于一小时
+// 参数：RTH结束时间（可调整）
+rth_end_hour = input.int(15, title="RTH结束小时")
+rth_end_minute = input.int(0, title="RTH结束分钟")
+
+// 获取当前时间（基于图表时区）
+current_time = time
+current_year = year(current_time)
+current_month = month(current_time)
+current_day = dayofmonth(current_time)
+current_hour = hour(current_time)
+current_minute = minute(current_time)
+
+// 构建当日RTH结束时间戳（美东时间）
+rth_end_timestamp = timestamp(current_year, current_month, current_day, rth_end_hour, rth_end_minute, 0)
+
+// 计算剩余时间（毫秒）
+remaining_ms = rth_end_timestamp - current_time
+
+// 判断条件：剩余时间≤1小时且当前时间未超RTH结束
+is_last_hour = remaining_ms <= 3600000 and remaining_ms >= 0
 
 
-if array.size(zigzagIndexes) > 1
+if array.size(zigzagIndexes) > 1 and not is_last_hour
     latestIndex = array.get(zigzagIndexes, 0)
     highLow = array.get(zigzagDir, 0)
     value = array.get(zigzagValues, 0)
     if bar_index  - latestIndex < maxConfirmBars and strategy.position_size == 0
-        if (highLow == -1 or highLow == -2) and trendCandleLong and close > high[bar_index - latestIndex]
+        canLong = false
+        longTrendSignal = (trendCandleBelowSignal? close > high[bar_index - latestIndex]:true)
+        if longSignal == 'BOTH' and (highLow == -1 or highLow == -2) and trendCandleLong and longTrendSignal
+            canLong := true
+        if longSignal == 'HL' and highLow == -1 and trendCandleLong and longTrendSignal
+            canLong := true
+        if longSignal == 'LL' and highLow == -2 and trendCandleLong and longTrendSignal
+            canLong := true
+        if canLong
             loss_points = high + syminfo.mintick - value
             qty = math.ceil(500 / loss_points / 5)
             strategy.cancel_all()
@@ -199,7 +233,15 @@ if array.size(zigzagIndexes) > 1
                 strategy.exit("Long", stop= value, limit= (high - value) + high)
             else
                 strategy.exit("Long", stop= value, limit= (high - value) /2 + high)
-        if (highLow == 1 or highLow == 2) and trendCandleShort and close < low[bar_index - latestIndex]
+        canShort = false
+        shortTrendSignal = (trendCandleBelowSignal? close < low[bar_index - latestIndex]:true)
+        if shortSignal == 'BOTH' and (highLow == 1 or highLow == 2) and trendCandleShort and shortTrendSignal
+            canShort := true
+        if shortSignal == 'LH' and highLow == 1 and trendCandleShort and shortTrendSignal
+            canShort := true
+        if shortSignal == 'HH' and highLow == 2 and trendCandleShort and shortTrendSignal
+            canShort := true
+        if canShort
             loss_points = value - (low - syminfo.mintick)
             qty = math.ceil(500 / loss_points / 5)
             strategy.cancel_all()
