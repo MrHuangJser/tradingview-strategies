@@ -215,7 +215,7 @@ if array.size(zigzagIndexes) > 1 and not is_last_hour
     latestIndex = array.get(zigzagIndexes, 0)
     highLow = array.get(zigzagDir, 0)
     value = array.get(zigzagValues, 0)
-    if bar_index  - latestIndex < maxConfirmBars and strategy.position_size == 0
+    if bar_index  - latestIndex <= maxConfirmBars and strategy.position_size == 0
         canLong = false
         longTrendSignal = (trendCandleBelowSignal? close > high[bar_index - latestIndex]:true)
         if longSignal == 'BOTH' and (highLow == -1 or highLow == -2) and trendCandleLong and longTrendSignal
