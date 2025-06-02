@@ -210,6 +210,11 @@ remaining_ms = rth_end_timestamp - current_time
 // 判断条件：剩余时间≤1小时且当前时间未超RTH结束
 is_last_hour = remaining_ms <= 3600000 and remaining_ms >= 0
 
+if remaining_ms < 1200000 and remaining_ms > 0 and strategy.position_size !=0 
+    strategy.close_all("日内结束")
+
+if strategy.position_size == 0
+    strategy.cancel_all()
 
 if array.size(zigzagIndexes) > 1 and not is_last_hour
     latestIndex = array.get(zigzagIndexes, 0)
